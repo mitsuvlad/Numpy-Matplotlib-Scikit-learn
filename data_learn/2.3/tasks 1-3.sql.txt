@@ -1,0 +1,17 @@
+select sum(o.sales) as "Total Sales", sum(o.profit) as "Total Profit",
+sum(o.profit) / sum(o.sales) as "Profit Ratio", sum(o.profit) / count(distinct o.order_id) as "Profit per Order",
+sum(o.sales) / count(distinct o.customer_id) as "Sales per Customer", avg(o.discount)  as "avg_discount"
+from orders o; --1 task
+
+select o.category, sum(o.sales) from orders o
+group by o.category; -- 2 task 
+
+select o.customer_name,  sum(o.sales) as "Total Sales", sum(o.profit) as "Total Profit"
+from orders o
+group by o.customer_name
+order by "Total Profit" desc -- rank customers
+
+select o.region ,  sum(o.sales) as "Total Sales"
+from orders o
+group by o.region
+order by "Total Sales" desc -- sales by region
