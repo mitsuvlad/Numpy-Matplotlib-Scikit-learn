@@ -1,0 +1,220 @@
+create schema dw;
+
+CREATE TABLE dw.ship_modes
+(
+ "id"   int NOT NULL,
+ name varchar(50) NOT NULL,
+ CONSTRAINT PK_30 PRIMARY KEY ( "id" )
+);
+truncate table dw.ship_modes;
+insert into dw.ship_modes
+select 0+row_number() over(), ship_mode from (select distinct ship_mode from stg.orders ) a;
+--checking
+select * from dw.ship_modes sd;
+
+
+CREATE TABLE dw.segments
+(
+ "id"   int NOT NULL,
+ name varchar(50) NOT NULL,
+ CONSTRAINT PK_60 PRIMARY KEY ( "id" )
+);
+insert into dw.segments
+select 0+row_number() over(), segment from (select distinct segment from stg.orders ) a;
+--checking
+select * from dw.segments s;
+
+
+CREATE TABLE dw.customer
+(
+ "id"          int NOT NULL,
+ name        varchar(50) NOT NULL,
+ segment_id  int NOT NULL,
+ customer_id varchar(8) NOT NULL
+);
+
+insert into dw.customers 
+select 0+row_number() over(), customer_name, id, customer_id from (select stg.orders.customer_name, s.id,  stg.orders.customer_id  from stg.orders
+join dw.segments s on s."name" = stg.orders.segment
+group by stg.orders.customer_name, s.id,  stg.orders.customer_id ) a;
+--checking
+select * from dw.customers s;
+
+drop table if exists dw.geo_dim ;
+CREATE TABLE dw.geo_dim
+(
+ geo_id      serial NOT NULL,
+ country     varchar(13) NOT NULL,
+ city        varchar(17) NOT NULL,
+ state       varchar(20) NOT NULL,
+ postal_code varchar(20) NULL,       --can't be integer, we lost first 0
+ CONSTRAINT PK_geo_dim PRIMARY KEY ( geo_id )
+);
+
+--deleting rows
+truncate table dw.geo_dim;
+--generating geo_id and inserting rows from orders
+insert into dw.geo_dim 
+select 100+row_number() over(), country, city, state, postal_code from (select distinct country, city, state, postal_code from stg.orders ) a;
+--data quality check
+select distinct country, city, state, postal_code from dw.geo_dim
+where country is null or city is null or postal_code is null;
+
+-- City Burlington, Vermont doesn't have postal code
+update dw.geo_dim
+set postal_code = '05401'
+where city = 'Burlington'  and postal_code is null;
+
+--also update source file
+update stg.orders
+set postal_code = '05401'
+where city = 'Burlington'  and postal_code is null;
+
+
+CREATE TABLE categories
+(
+ "id"          int NOT NULL,
+ name        varchar(20) NOT NULL,
+ CONSTRAINT PK_54 PRIMARY KEY ( "id" )
+);
+
+insert into dw.categories 
+select 0+row_number() over(), category  from (select distinct stg.orders.category  from stg.orders) a;
+
+select * from dw.categories c;
+
+
+CREATE TABLE sub_categories
+(
+ "id"          int NOT NULL,
+ name        varchar(50) NOT NULL,
+ category_id int NOT NULL,
+ CONSTRAINT PK_67 PRIMARY KEY ( "id" ),
+ CONSTRAINT FK_110 FOREIGN KEY ( category_id ) REFERENCES categories ( "id" )
+);
+
+CREATE INDEX FK_112 ON sub_categories
+(
+ category_id
+);
+insert into dw.sub_categories  
+select 0+row_number() over(), subcategory, id from (select stg.orders.subcategory, c.id  from stg.orders
+join dw.categories  c on c."name" = stg.orders.category 
+group by stg.orders.subcategory, c.id ) a;
+--checking
+select * from dw.sub_categories   s;
+
+
+CREATE TABLE products
+(
+ "id"              int NOT NULL,
+ name            varchar(50) NOT NULL,
+ sub_category_id int NOT NULL,
+ product_id      varchar(20) NOT NULL,
+ CONSTRAINT PK_68 PRIMARY KEY ( "id" ),
+ CONSTRAINT FK_113 FOREIGN KEY ( sub_category_id ) REFERENCES sub_categories ( "id" )
+);
+
+CREATE INDEX FK_115 ON products
+(
+ sub_category_id
+);
+
+insert into dw.products 
+select 0+row_number() over(), product_name, id, product_id  from (select stg.orders.product_name, s.id, stg.orders.product_id from stg.orders
+join dw.sub_categories  s on s."name" = stg.orders.subcategory
+group by stg.orders.product_name, s.id, stg.orders.product_id ) a;
+--checking
+select * from dw.products p ;
+
+drop table if exists dw.calendar ;
+CREATE TABLE dw.calendar
+(
+dateid int  NOT NULL,
+year        int NOT NULL,
+quarter     int NOT NULL,
+month       int NOT NULL,
+week        int NOT NULL,
+date        date NOT NULL,
+week_day    varchar(20) NOT NULL,
+leap  varchar(20) NOT NULL,
+CONSTRAINT PK_calendar PRIMARY KEY ( dateid )
+);
+insert into dw.calendar 
+select 
+to_char(date,'yyyymmdd')::int as date_id,  
+       extract('year' from date)::int as year,
+       extract('quarter' from date)::int as quarter,
+       extract('month' from date)::int as month,
+       extract('week' from date)::int as week,
+       date::date,
+       to_char(date, 'dy') as week_day,
+       extract('day' from
+               (date + interval '2 month - 1 day')
+              ) = 29
+       as leap
+  from generate_series(date '2000-01-01',
+                       date '2030-01-01',
+                       interval '1 day')
+       as t(date);
+--checking
+select * from dw.calendar; 
+
+CREATE TABLE sales
+(
+ "id"            int NOT NULL,
+ order_id      varchar (25) NOT NULL,
+ post_id       int NOT NULL,
+ product_id    int NOT NULL,
+ customer_id   int NOT NULL,
+ ship_mode_id  int NOT NULL,
+ order_date_id int NOT NULL,
+ ship_date_id  int NOT NULL,
+ sales         decimal(10,4) NOT NULL,
+ quantity      int NOT NULL,
+ discount      decimal(4,2) NOT NULL,
+ profit        decimal(10,4) NOT NULL,
+ CONSTRAINT PK_13 PRIMARY KEY ( "id" )
+);
+
+CREATE INDEX FK_118 ON orders
+(
+ ship_mode_id
+);
+
+CREATE INDEX FK_124 ON orders
+(
+ customer_id
+);
+
+CREATE INDEX FK_127 ON orders
+(
+ product_id
+);
+
+CREATE INDEX FK_147 ON orders
+(
+ post_id
+);
+
+CREATE INDEX FK_94 ON orders
+(
+ order_date_id
+);
+truncate dw.sales 
+insert into dw.sales 
+select 0+row_number() over(), order_id, geo_id, product_id, customer_id, ship_mode_id, order_date_id, ship_date_id, sales, quantity, discount, profit from (select  stg.orders.order_id,
+g.geo_id, pr.id as product_id,
+c.id as customer_id, s.id as ship_mode_id,
+to_char(order_date,'yyyymmdd')::int as  order_date_id,
+to_char(ship_date,'yyyymmdd')::int as  ship_date_id,
+stg.orders.sales, stg.orders.quantity, stg.orders.discount, stg.orders.profit  from stg.orders
+join dw.geo_dim  g on g.postal_code  = stg.orders.postal_code and g.country = stg.orders.country and g.city = stg.orders.city and g.state =stg.orders.state 
+join dw.products  pr on pr.product_id  = stg.orders.product_id and pr."name" = stg.orders.product_name
+join dw.customers c on c.customer_id  = stg.orders.customer_id
+join dw.ship_modes  s on s."name"  = stg.orders.ship_mode
+) a;
+--checking
+select count(*) from dw.sales s;
+select count(*) from stg.orders;
+
